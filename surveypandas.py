@@ -1,6 +1,21 @@
 #!/usr/bin/python
 
 """
+SurveyPandas adds survey-data features to the Pandas data structure.
+Survey data typically has the following extra information:
+ - "Variable labels": Description of each variable
+ - "Value labels": If the variable encodes discrete response options,  a description of what each value means
+ - Possibly a questionnaire question related to the variable
+
+Some variables may share value labels. In this case, the actual lookups may be shared across variables or may be duplicated/redundant (ie, implementation tbd). To simplify this, the object can also contain a list of names of sets/lookups of value labels.
+
+Classes:
+
+surveyDataFrame : a Pandas DataFrame object augmented with survey-related data and methods
+surveySeries : corresponding Series object. 
+
+surveycodebook: 
+
 Here we define a "pandas + dict" dataformat, in which a DataFrame and a dict together specify the values as well as the variable descriptions and value descriptions for (survey) data.
 The DataFrame is a Pandas DataFrame.
  The dict is nested, with format:
@@ -171,7 +186,7 @@ class surveycodebook(dict):  #  # # # # #    MAJOR CLASS    # # # # #  #
         missing : set of values like "don't know" which should be considered missing
         valuesOnly: This will create labels for values, but it won't relabel the variables themselves
 
-ohoh. is this sthe same as createValueLAbels?  Retire one of them!? The other doesn't do the value labels.
+
         """
         outs=''
         import re
