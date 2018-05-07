@@ -1,6 +1,7 @@
 #!/usr/bin/python
 """
-# N.B.: This ported from pystata 20180504
+# N.B.: This ported from pystata 20180504.  It is part of this repo only to be scavenged for new class in surveypandas
+
 To do: 
  - In Stata, "label list" gives an instant readout of all value labels. Use this rather than labelbook !?! [oct 2011]
 

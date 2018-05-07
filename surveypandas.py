@@ -1,10 +1,12 @@
 #!/usr/bin/python
+# -*- coding: utf-8 -*-
 
 """
 SurveyPandas adds survey-data features to the Pandas data structure.
 Survey data typically has the following extra information:
  - "Variable labels": Description of each variable
  - "Value labels": If the variable encodes discrete response options,  a description of what each value means
+ - "Float values": Possibility of mapping integer values to NaN
  - Possibly a questionnaire question related to the variable
 
 Some variables may share value labels. In this case, the actual lookups may be shared across variables or may be duplicated/redundant (ie, implementation tbd). To simplify this, the object can also contain a list of names of sets/lookups of value labels.
@@ -17,7 +19,7 @@ surveySeries : corresponding Series object.
 surveycodebook: 
 
 Here we define a "pandas + dict" dataformat, in which a DataFrame and a dict together specify the values as well as the variable descriptions and value descriptions for (survey) data.
-The DataFrame is a Pandas DataFrame.
+The DataFrame is a Pandas DataFrame. 
  The dict is nested, with format:
 {'_dataset_description': string,
 variablename: {'description': string,
@@ -54,8 +56,50 @@ and then read it in with
 
 infix using highway.dct
 
+n.b.: statsmodels.iolib.foreign.StataReader  seems not to be maintained; only Stata versions 8-12 can be read. Thus we use Stata text output as a version-independent way to transfer.
 
 """
+
+from surveypandas_config import defaults
+paths= defaults['paths']
+from collections import OrderedDict
+import os
+import pandas as pd
+from cpblUtilities import doSystem
+from copy import deepcopy
+
+
+def some_unicode_quotes_to_latex(str):
+    subs =[
+        [u"\u0027", "\\textquotesingle "],
+        [u'´', u"'"],
+        ]
+    for a,b in subs:
+        str=str.replace(a,b)
+    return str
+
+def treat_dict_strings_recursively(dictlike, method):
+    """ Recursively treat strings in a dict or OrderedDict by applying some method to each string in each key/value. E.g. to remove some unicode"""
+    def treat_value(vv):
+        if isinstance(v, basestring):
+            return method(vv)
+        if v.__class__ in [dict, OrderedDict]:
+            return treat_dict_strings_recursively(vv, method)
+        return vv
+    for _ in range(len(dictlike)):
+        k, v = dictlike.popitem()
+        dictlike[k if not isinstance(k, basestring) else method(k)] = treat_value(v)
+    return dictlike # Needed only for recursion, since the original dict is changed in place
+
+def test_treat_dict_strings_recursively():
+    x = {'234': 'oiwe', 5:23, u'Don´t know':{u'Don´t know':u'Don\xb4t know'}}
+    print x
+    treat_dict_strings_recursively(x, some_unicode_quotes_to_latex)
+    print x
+    assert "Don't know" in x
+    assert "Don't know" in x["Don't know"]
+    assert 5 in x
+    
 
 def load_text_data_using_SAS_syntax(sasfile='/home/cpbl/rdc/inputData/GSS27/Syntax_Syntaxe/GSS27SI_PUMF.sas',datafile='/home/cpbl/rdc/inputData/GSS27/Data/C27PUMF.txt',outfilePandas=None,outfileStata=None):
     """
@@ -152,12 +196,277 @@ def load_text_data_using_SAS_syntax(sasfile='/home/cpbl/rdc/inputData/GSS27/Synt
         stataout+=stata.stataSave(outfileStata)
         stata.stataSystem(stataout)
 
+
+
+class surveycodebook(OrderedDict):
+    def __init__(self,source= None):
+
+        if source.__class__ in [surveycodebook,  OrderedDict]:
+            super(surveycodebook, self).__init__(source)
+        elif source.__class__ == dict: # Got an unordered dict for some reason. Should do some checking on its contents: TO DO
+            super(surveycodebook, self).__init__(OrderedDict(source))
+            
+        elif isinstance(source, basestring):
+            foo =self._from_stata(source)
+            #assert isinstance(foo, OrderedDict)
+            print foo
+            super(surveycodebook, self).__init__(foo)
+        else:
+            super(surveycodebook, self).__init__(source)
+        print 'after init', self
+            
+    ################################################################
+    def _from_stata(self,datafilepath,recreate=None,toLower=None, subset = None):
+    ################################################################
+        """
+        Initialise a codebook object from a Stata file's own information. Read this via text output, rather than from Stata digital file (See pyDTA project for an attempt at that).
+        If Stata's codebooks have not already been logged, or if they are older than the dta, Stata will be called to generate the text output.
+        If it has, the resulting log files will simply be parsed.
+
+        Takes a .dta stata file and generates text files containing the codebook and label list. Can be slow for big datasets.
+        See the parsing function, next, for parsing said text files.
+
+        Note: the do file and log file goes in the source dir (do file has to go there since the statasystem call puts it in the same place). The tsv goes in workingPath.
+
+        Note: this is run even on raw versions of datasets, which is kind of useless in the case of summary statistics, since they may contain all manner of non-response numeric values still...
+
+        subset lists a set of variables to include
+        """
+        from pystata import stripdtagz # Import pystata locally, since it's only one interface for surveyPandas
+        from codecs import open # Overwrite open so as to always use utf8 for text files and reading Stata output
+
+        datafilepath=stripdtagz(datafilepath)
+        sourceDir,sourceName=os.path.split(datafilepath)
+        assert '.' not in sourceName         # because Stata screws up filenames for choosing log name/location
+        if not os.path.exists(datafilepath+'.dta.gz'): # Assumes use of gzuse rather than use. (TO DO: allow for uncompressed .dta files)
+            raise Error('   ********* There is no data file '+datafilepath+' from which to make a codebook... so no DTA codebook for you! (If this is not solved by running through any Stata execution, something is wrong!)')
+            return {}
+
+
+        ###fxdnm=datafilepath#sourceDir+'/'+sourceName#.replace('.','_')
+        CdoFileName=datafilepath+'_StataCodebook'+'.do' ## paths['working']+sourceName
+        ClogFileName=datafilepath+'_StataCodebook'+'.log'
+
+        if recreate==False:
+            print ' WARNING! RECREATE SET TO "FALSE", WHICH ALLOWS CODEBOOK TO BECOME OUTDATED. SET IT BACK TO DEFAULT "NONE"'
+
+        # Logic below: if recreate is None, then check to see if log file is outdated or not. If recreate is True or False, then that overrides.
+        forceC=recreate
+        if recreate in [None,True] and not os.path.exists(ClogFileName):
+            print('%s does not exist. Recreating from %s.'%(ClogFileName,datafilepath+'.dta.gz'))
+            forceC=True
+        elif recreate in [None,True] and os.path.getmtime(ClogFileName)<os.path.getmtime(datafilepath+'.dta.gz'):
+            print('%s is older than %s.  Recreating it.'%(ClogFileName,datafilepath+'.dta.gz'))
+            forceC=True
+        subsetString='codebook \n'
+        if subset:
+            subsetString="""
+foreach var in  """+' '.join(subset)+""" {
+capture confirm variable `var',exact
+if _rc==0 {
+codebook `var'
+}
+}
+"""
+        if forceC:
+
+            print '    To create '+CdoFileName+':  '
+            from pystata import stataSystem,stataLoad
+            rlogfn=stataSystem("""
+              clear
+            set more off
+            """+stataLoad(datafilepath)+"""
+             """+subsetString+"""
+            * DONE SUCCESSFULLY GOT TO END
+            """)
+            if 'DONE SUCCESSFULLY GOT TO END' in open(rlogfn,'rt', encoding='UTF8').read():
+                doSystem('cp %s %s'%(rlogfn,ClogFileName))
+                print " Overwrote "+ClogFileName
+            else:
+                print " Failed to update "+ClogFileName
+
+        LdoFileName=datafilepath+'_StataLabelbook'+'.do' ## paths['working']+sourceName
+        LlogFileName=datafilepath+'_StataLabelbook'+'.log'
+        # Logic below: if recreate is None, then check to see if log file is outdated or not. If recreate is True or False, then that overrides.
+        forceL=recreate
+        if recreate in [None,True] and not os.path.exists(LlogFileName):
+            print('%s does not exist! Recreating from %s.'%(LlogFileName,datafilepath+'.dta.gz'))
+            forceL=True
+        elif recreate in [None,True] and os.path.getmtime(LlogFileName)<os.path.getmtime(datafilepath+'.dta.gz'):
+            print('%s is older than %s!  Recreating it.'%(LlogFileName,datafilepath+'.dta.gz'))
+            forceL=True
+        if forceL:
+
+            print '    To create '+LdoFileName+':  '
+            rlogfn=stataSystem("""
+              clear
+            set more off
+            """+stataLoad(datafilepath)+"""
+            labelbook
+            * DONE SUCCESSFULLY GOT TO END
+            """)#,filename='tmp_doMakeLabelbook')
+            if 'DONE SUCCESSFULLY GOT TO END' in open(rlogfn,'rt').read():
+                #import shutil
+                #shutil.move(rlogfn,LdoFileName)
+                doSystem('cp %s %s'%(rlogfn,LlogFileName))
+                print " Overwrote "+LlogFileName
+            else:
+                print " Failed to update "+LlogFileName
+
+
+        # Check work (and make a tsv version) by calling the following:
+        # This sets self to the codebook.
+        #return OrderedDict({1:2, '3':'f'})
+        return self.parseStataCodebook(ClogFileName,LlogFileName,toLower=toLower)
+        assert self.keys()
+        return self
+
+            
+        
+    ################################################################
+    ################################################################
+    def parseStataCodebook(self,codebookFile,labelbookFile,toLower=None):
+    ################################################################
+    ################################################################
+        """
+
+        This function is now meant to be used only internally.
+        Just call fromStataCodebook to initialise a codebook object from a Stata file's own information.
+        If it has not already been done, Stata will be called. If it has, the resulting log files will simply be parsed.
+
+
+        If your dataset is well internally documented, use Stata to create a text log file of the codebook command and another of the labelbook command. Feed those files to this function to get a dict of the available variables.
+
+    When Stata prints the variable description on multiple lines, this captures it properly.
+
+    One issue is that the resulting codebook structure does not preserve the order of variables (which is prserverd in the codebook command in Stata. So return a separate list of variable names?
+
+        """
+        from codecs import open # Overwrite open so as to always use utf8 for text files and reading Stata output
+        
+        print '  Parsing stata codebook file '+codebookFile
+
+        cbook= []
+        try:
+            ff=open(codebookFile,encoding='utf-8').read()
+        except (UnicodeDecodeError):
+            print('    ---> (Legacy?) utf-8 method Failed on codebook reading. Trying non-utf-8')
+            ff=open(codebookFile).read()
+        import re
+
+        #variableNames=re.findall(r'-------------------------------------------------------------------------------\n([^\n\s]*)\s+([^\n\s]*)\n-------------------------------------------------------------------------------',ff,re.MULTILINE)#
+        #print variableNames
+
+        grs=ff.split('-------------------------------------------------------------------------------')
+        #variableNs=grs[1::2]
+        listOfNames=[]
+        #variableDescs=grs[2::2]
+        for hl, details in zip(grs[1::2],    grs[2::2]):
+            vv,desc=re.findall(r'([^\s]*)\s+(.*)',hl.strip(),re.DOTALL)[0]
+            if toLower:
+                vv=vv.lower()
+            listOfNames+=[vv]
+            cbook+= [[vv,  dict(desc = re.sub(r'\s+',' ',desc),
+                            stataCodebook = details # For reference, store everything
+                            )]]
+        cbook = OrderedDict(cbook) # Preserves variable order from Stata
+        
+        """ NOW READ LABELBOOK
+        This may fail if labels are reused for multi variables, but can be fixed...
+        IT now works for value labels which span more than one line, though it's frageile / kludged.
+
+        """
+
+        # Dec 2011: desperate. can't deal with utf-8 sheis. so using errors='replace'. :(
+        ff=open(labelbookFile,encoding='utf-8',errors='replace').read()
+        lrs=ff.split('-------------------------------------------------------------------------------')
+        variableLabels=lrs[2::2]
+        for vL in variableLabels:
+            labelListAndVars=re.findall(r'\n\s+definition\n(.*?)\n\s*variables:(.*?)\n',vL,re.MULTILINE+re.DOTALL)[0]
+
+            for  avar in  labelListAndVars[1].strip().split(','):
+                var=avar.strip()
+                couldBeMultipleVars=var.split(' ')
+                var=couldBeMultipleVars[0]
+                if toLower:
+                    var=var.lower()
+                if var in cbook: # 2010 Jan: N.B. THis was not necessary until I started allowing "subset" restriction for the codebook: I now may get codebook for a subset of variables, but labelbook for all of them.
+                    cbook[var]['labels']={}
+                for otherVar in couldBeMultipleVars[1:]:
+                    if var in cbook: # See comment just above Jan 2010
+                        cbook[otherVar]['labels']= cbook[var]['labels']
+
+                """Horrid kludge to join multi-line descriptions: (ie assuming a fairly fixed format by STata)
+                It has a problem for cases when there are values with no description?
+                """
+                revisedTable=labelListAndVars[0].strip().replace('\n               ',' ').split('\n')
+                for LL in revisedTable:#labelListAndVars[0].strip().split('\n'):
+                    assert not '               ' in LL
+                    val_name_=re.findall(r'([^\s]*)\s+(.*)',LL.strip())
+                    if val_name_:
+                        val_name=val_name_[0]
+                    else: # Maybe there's a value without a label here?
+                        val_name=[LL.strip(),'']
+                    if var in cbook: # See comment above, Jan 2010
+                        # The value could be a ".a" or etc, ie not a number!
+                        if val_name[0].startswith('.'):
+                            cbook[var]['labels'][val_name[0]]=val_name[1]
+                        else:
+                            cbook[var]['labels'][int(val_name[0])]=val_name[1]
+                            assert not '.' in val_name[0] #fishing.. does my code for ".a" work?
+                        cbook[var]['labelbook']=deepcopy(vL)
+
+            #       print cbook[var]['desc']+':'+var+ str(cbook[var]['labels'])
+
+        # Let's also make a convenient summary tsv file of the variables. Use original order of variables
+
+        import os
+        cbfDir,cbfName=os.path.split(codebookFile)
+
+        fnn=paths['working']+cbfName+'_varlist.tsv'
+        fout= open(fnn,'wt', encoding='utf8')
+        for vv in listOfNames:#cbook:
+            fout.write('\t%s\t%s\n'%(vv,cbook[vv]['desc']))
+        fout.close()
+        assert listOfNames
+        print "   Parsed codebook file to find %d variables; Wrote %s."%(len(listOfNames),fnn)
+
+        assert self==None or self=={}
+        return cbook
+        self.update(cbook)
+        self.__orderedVarNames=listOfNames
+        #self._stataCodebookClass__orderedVarNames =listOfNames
+        #self.variableOrder.update(listOfNames)
+        return
+
+    def clean_up_strings(self):
+        ohoh
+        some_unicode_quotes_to_latex
+
+
+        
 ###########################################################################################
 ###
-class surveycodebook(dict):  #  # # # # #    MAJOR CLASS    # # # # #  #
+class Bsurveycodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
     ###
     #######################################################################################
-    def __init__(self,source,fromDTA=False,fromTSV=False,fromPDF=False, loadName=None,):#  recreate=None, toLower=None,showVars=None,survey=None,version=None,stringsAreTeX=None):#*args,foo=None):  # Agh. June 2010: added "version" here this might confuse things, but there was a bug...
+    """
+        The primary dict/data of this object is an OrderedDict of information about survey data variables.
+
+    Value labels are lookups (OrderedDicts) from integer values to strings  which can initially be shared between variables (keys of surveycodebook). However, they must be deepcopied and made independent if ever the value labels are changed for some variable.
+    The same is true of Float Values, which is a lookup that can be used to allow some integers to have NaN values
+
+    In general, where text may be used for formatted printing, LaTeX markup is used.
+
+        self._variable_labels = {}
+        self._value_labels = {}  # Maps column names to named lookups
+        self._named_labels = {}  # Stores named lookups, each of which maps integer values to labels
+        self._named_float_values = {} # Stores named lookups, each of which maps integer values to float values (including NaN)
+        self._questions = {} # Maps column names to relevant questionnaire question / further info
+    """
+    
+    def __init__(self,source= None, fromDTA=False,fromTSV=False,fromPDF=False, loadName=None,):#  recreate=None, toLower=None,showVars=None,survey=None,version=None,stringsAreTeX=None):#*args,foo=None):  # Agh. June 2010: added "version" here this might confuse things, but there was a bug...
+
         """ Allow instantiation from a dict (codebook=dict) or from a Stata dataset itself (fromDTA=filename)
 
         myCodebook=stataCodebookClass()
@@ -167,9 +476,22 @@ class surveycodebook(dict):  #  # # # # #    MAJOR CLASS    # # # # #  #
             i.e.: {varname:    }
 
         """
-        if source.__class__ == surveycodebook or source.__class__ == dict: 
-            dict.__init__(self, source)
-        return
+        if source.__class__ in [surveycodebook,  OrderedDict]:
+            super(surveycodebook, self).__init__(source)
+        if source.__class__ == dict: # Got an unordered dict for some reason. Should do some checking on its contents: TO DO
+            super(surveycodebook, self).__init__(OrderedDict(source))
+        if isinstance(source, basestring) and source.endswith('.dta.gz'):
+            foo =self._from_stata(source)
+            assert isinstance(foo, OrderedDict)
+            super(surveycodebook, self).__init__(foo)
+            if 0: 
+                for a,b in foo.items():
+                    self[a]=b
+            print 'after init', self
+            #super(surveycodebook, self).__init__(self, {1:2, '3':'f'})
+
+
+    
     ################################################################
     ################################################################
     def assignLabelsInStata(self,autofindBooleans=True,missing=None,onlyVars=None,valuesOnly=False):
@@ -217,25 +539,31 @@ class surveycodebook(dict):  #  # # # # #    MAJOR CLASS    # # # # #  #
             outs+='\n'+'*'*(not not valuesOnly)+'capture noisily label variable %s "%s"\n'%(thisVar,vcb[desckey])
         return(outs)
 
-import pandas as pd
-###########################################################################################
-###
-class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
-    ###
-    #######################################################################################
-    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=False,                   codebook=None):
-        # Can I not use super() in the line below?
-        pd.DataFrame.__init__(self, data=None, index=None, columns=None, dtype=None, copy=False)
-        if codebook is not None:
-            self.cb=surveycodebook(codebook)
-                 
 
+
+def from_stata(stata_filename):
+    cb =surveycodebook({1:2, '3':'f'})    
+    print cb.keys()    
+    cb = surveycodebook(paths['working']+'WV6_Stata_v_2016_01_01.dta.gz')
+#    cb =surveycodebook(stata_filename)
+    print cb.keys()    
+    #cb.clean_up_strings()
+    print len(cb)
+    treat_dict_strings_recursively(cb, some_unicode_quotes_to_latex)
+    foo
+    
 if __name__ == '__main__':
-    #pass
-    # parseSimultaneousQuantileRegression()
-    from cpblDefaults import *
-    load_text_data_using_SAS_syntax(sasfile='/home/cpbl/rdc/inputData/GSS27/Syntax_Syntaxe/GSS27SI_PUMF.sas',datafile='/home/cpbl/rdc/inputData/GSS27/Data/C27PUMF.txt',outfilePandas=WP+'test.pysurvey',outfileStata=WP+'GSS27')
+    test_treat_dict_strings_recursively()
+    stoph
+    x ={'234': 'oiwe', 5:23, 'foo':{ u'Don´t know':u'Don\xb4t know'}}
+    x = {u'Don´t know':{u'Don´t know':u'Don\xb4t know'}}
+    print x
+    treat_dict_strings_recursively(x, some_unicode_quotes_to_latex)
+    print x
+    from_stata('f')
 
+#cb =surveycodebook({1:2, '3':'f'})
+#print cb.keys()
 
 
 
