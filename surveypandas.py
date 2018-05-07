@@ -73,28 +73,41 @@ def some_unicode_quotes_to_latex(str):
     subs =[
         [u"\u0027", "\\textquotesingle "],
         [u'´', u"'"],
+        [u'“', "``"],
+        [u'”', "''"],
         ]
     for a,b in subs:
         str=str.replace(a,b)
     return str
 
-def treat_dict_strings_recursively(dictlike, method):
-    """ Recursively treat strings in a dict or OrderedDict by applying some method to each string in each key/value. E.g. to remove some unicode"""
+def treat_OrderedDict_strings_recursively(dictlike, method):
+    """ Recursively treat strings in a dict or OrderedDict by applying some method to each string in each key/value. E.g. to remove some unicode
+    This is for OrderedDicts. normal dicts to not accept the argument to popitem, so we would need to loop through the keys explicitly (what's wrong with that?)
+    """
     def treat_value(vv):
         if isinstance(v, basestring):
             return method(vv)
         if v.__class__ in [dict, OrderedDict]:
-            return treat_dict_strings_recursively(vv, method)
+            return treat_OrderedDict_strings_recursively(vv, method)
         return vv
-    for _ in range(len(dictlike)):
-        k, v = dictlike.popitem()
+    for k in  list(dictlike.keys()):
+        v=dictlike.pop(k)
         dictlike[k if not isinstance(k, basestring) else method(k)] = treat_value(v)
+    if 0:
+        for _ in range(len(dictlike)):
+            k, v = dictlike.popitem(False)
+            print k
+            dictlike[k if not isinstance(k, basestring) else method(k)] = treat_value(v)
     return dictlike # Needed only for recursion, since the original dict is changed in place
 
-def test_treat_dict_strings_recursively():
+def test_treat_odict_strings_recursively():
+    x = {1:2, 3:4, 5:6}
+    print x
+    treat_OrderedDict_strings_recursively(x, some_unicode_quotes_to_latex)
+    print x
     x = {'234': 'oiwe', 5:23, u'Don´t know':{u'Don´t know':u'Don\xb4t know'}}
     print x
-    treat_dict_strings_recursively(x, some_unicode_quotes_to_latex)
+    treat_OrderedDict_strings_recursively(x, some_unicode_quotes_to_latex)
     print x
     assert "Don't know" in x
     assert "Don't know" in x["Don't know"]
@@ -197,9 +210,39 @@ def load_text_data_using_SAS_syntax(sasfile='/home/cpbl/rdc/inputData/GSS27/Synt
         stata.stataSystem(stataout)
 
 
+        
+###########################################################################################
+###
+class surveycodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
+    ###
+    #######################################################################################
+    """
+        The primary dict/data of this object is an OrderedDict of information about survey data variables.
 
-class surveycodebook(OrderedDict):
-    def __init__(self,source= None):
+    Value labels are lookups (OrderedDicts) from integer values to strings  which can initially be shared between variables (keys of surveycodebook). However, they must be deepcopied and made independent if ever the value labels are changed for some variable.
+    The same is true of Float Values, which is a lookup that can be used to allow some integers to have NaN values
+
+    In general, where text may be used for formatted printing, LaTeX markup is used.
+
+        self._variable_labels = {}
+        self._value_labels = {}  # Maps column names to named lookups
+        self._named_labels = {}  # Stores named lookups, each of which maps integer values to labels
+        self._named_float_values = {} # Stores named lookups, each of which maps integer values to float values (including NaN)
+        self._questions = {} # Maps column names to relevant questionnaire question / further info
+    """
+    
+    def __init__(self,source= None):#, fromDTA=False,fromTSV=False,fromPDF=False, loadName=None,):#  recreate=None, toLower=None,showVars=None,survey=None,version=None,stringsAreTeX=None):#*args,foo=None):  # Agh. June 2010: added "version" here this might confuse things, but there was a bug...
+
+        """ Allow instantiation from a dict (codebook=dict) or from a Stata dataset itself (fromDTA=filename)
+
+        myCodebook=stataCodebookClass()
+        myCodebook=stataCodebookClass(fromDTA=myfilepath)
+        myCodebook=stataCodebookClass(codebook=myDict)
+        myCodebook=stataCodebookClass( a dict already in format of codebook)
+            i.e.: {varname:    }
+
+        """
+
 
         if source.__class__ in [surveycodebook,  OrderedDict]:
             super(surveycodebook, self).__init__(source)
@@ -487,7 +530,6 @@ class Bsurveycodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
             if 0: 
                 for a,b in foo.items():
                     self[a]=b
-            print 'after init', self
             #super(surveycodebook, self).__init__(self, {1:2, '3':'f'})
 
 
@@ -540,27 +582,49 @@ class Bsurveycodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
         return(outs)
 
 
+def test_surveycodebook():
+    stata_filename = paths['working']+'WV6_Stata_v_2016_01_01'
+    cb = surveycodebook(stata_filename)
+    # Make the strings easier for LaTeX and other printing:
+    treat_OrderedDict_strings_recursively(cb, some_unicode_quotes_to_latex)
+    
 
-def from_stata(stata_filename):
-    cb =surveycodebook({1:2, '3':'f'})    
-    print cb.keys()    
-    cb = surveycodebook(paths['working']+'WV6_Stata_v_2016_01_01.dta.gz')
-#    cb =surveycodebook(stata_filename)
-    print cb.keys()    
-    #cb.clean_up_strings()
-    print len(cb)
-    treat_dict_strings_recursively(cb, some_unicode_quotes_to_latex)
-    foo
+###########################################################################################
+###
+class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
+    ###
+    #######################################################################################
+    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=False,                   codebook=None):
+        # Can I not use super() in the line below?
+        pd.DataFrame.__init__(self, data=None, index=None, columns=None, dtype=None, copy=False)
+        self.codebook = None
+        
+        if codebook is not None:
+            self.codebook=surveycodebook(codebook)
+                 
+
+     
+
+# Module interfaces to surveyPandas:
+def read_stata(stata_filename):
+    """ 
+    Load data from a Stata file into a Pandas DataFrame derivative, but also load all the label and value label information into a codebook structure.
+    """
+    from pystata import dta2df
+    df = dta2df(stata_filename)
+    cb = surveycodebook(stata_filename)
+    df.codebook = cb
+    return df
+    
+    #Test codebook loading:
+    # Load 
+
     
 if __name__ == '__main__':
-    test_treat_dict_strings_recursively()
-    stoph
-    x ={'234': 'oiwe', 5:23, 'foo':{ u'Don´t know':u'Don\xb4t know'}}
-    x = {u'Don´t know':{u'Don´t know':u'Don\xb4t know'}}
-    print x
-    treat_dict_strings_recursively(x, some_unicode_quotes_to_latex)
-    print x
-    from_stata('f')
+    test_treat_odict_strings_recursively()
+    test_surveycodebook()
+
+    df =read_stata(paths['working']+'WV6_Stata_v_2016_01_01.dta.gz')
 
 #cb =surveycodebook({1:2, '3':'f'})
 #print cb.keys()
