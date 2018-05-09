@@ -561,7 +561,9 @@ class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
         if codebook is not None:
             self.codebook=surveycodebook(codebook)
 
-
+    #def _from_dataframe_and_codebook(self, df, cb):
+    #    return( surveypandas(data = df, codebook=cb) )
+                
     def copy(self, deep=True):
         """
         Make a copy of this objects data.
@@ -578,10 +580,9 @@ class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
         -------
         copy : type of caller
         """
-        data = self._data.copy(deep=deep)
-        newcopy = self._constructor(data).__finalize__(self)
-        newcopy.codebook = deepcopy(self.codebook)
-        return newcopy
+        # Use DataFrame's copy for the DF part. And deepcopy 
+        return surveypandas(data = pd.DataFrame(self).copy(deep=True),
+                            codebook = deepcopy(self.codebook) )
 
     def __copy__(self, deep=True):
         return self.copy(deep=deep)
@@ -680,11 +681,12 @@ if __name__ == '__main__':
     sdf.assert_unique_columns()
     sdf.rename_variables_from_descriptions()
     sdf.assert_unique_columns()
-    sdf.set_float_values_from_negative_integers()
+    sdf.set_float_values_from_negative_integers() 
     sdf.assert_unique_columns()
-    fdf= sdf.to_floats()
-#cb =surveycodebook({1:2, '3':'f'})
-#print cb.keys()
+    print sdf.grep('satis')
+    sdf['Satisfaction_with_your_life'].describe()
+    fdf= sdf.to_floats() # Very slow, still.
+    fdf['Satisfaction_with_your_life'].describe()
 
 
 
