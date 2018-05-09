@@ -65,9 +65,13 @@ paths= defaults['paths']
 from collections import OrderedDict
 import os
 import pandas as pd
-from cpblUtilities import doSystem
+import numpy as np
+try:
+    from cpblUtilities import doSystem, dgetget
+except ImportError:
+    print(' Some functions will not work. Install cpblutilities ')
+    
 from copy import deepcopy
-
 
 def some_unicode_quotes_to_latex(str):
     subs =[
@@ -537,7 +541,6 @@ codebook `var'
                 self[k] = v
 
 
-
 def test_surveycodebook():
     stata_filename = paths['working']+'WV6_Stata_v_2016_01_01'
     cb = surveycodebook(stata_filename)
@@ -557,26 +560,96 @@ class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
         
         if codebook is not None:
             self.codebook=surveycodebook(codebook)
-                 
+
+
+    def copy(self, deep=True):
+        """
+        Make a copy of this objects data.
+        Parameters
+        ----------
+        deep : boolean or string, default True
+            Make a deep copy, including a copy of the data and the indices.
+            With ``deep=False`` neither the indices or the data are copied.
+            Note that when ``deep=True`` data is copied, actual python objects
+            will not be copied recursively, only the reference to the object.
+            This is in contrast to ``copy.deepcopy`` in the Standard Library,
+            which recursively copies object data.
+        Returns
+        -------
+        copy : type of caller
+        """
+        data = self._data.copy(deep=deep)
+        newcopy = self._constructor(data).__finalize__(self)
+        newcopy.codebook = deepcopy(self.codebook)
+        return newcopy
+
+    def __copy__(self, deep=True):
+        return self.copy(deep=deep)
+
+    def __deepcopy__(self, memo=None):
+        if memo is None:
+            memo = {}
+        return self.copy(deep=True)
+            
+    def rename_variables(self, lookup):
+        """  """
     def rename_variables_from_descriptions(self, subset = None):
         """ Use 'desc' field of codebook to provide crude variable names:
         """
         assert len(self.columns.unique()) == len(self.columns)
         subs_list=[]
+        r_subs_dict ={}
         for vv in self.columns:
             if subset is not None and vv in subset:
                 continue
             if vv not in self.codebook:
                 raise("sf")
             formattedDesc = ''.join([c if c.isalnum() else '_' for c in self.codebook[vv]['desc'] ])
-            subs_list += [[vv, formattedDesc]]
-        self.codebook.rename_keys(subs_list)
-        fofo
+            while formattedDesc in r_subs_dict:
+                formattedDesc += '_'
+            r_subs_dict[formattedDesc] = vv
+            #subs_dict += [[vv, formattedDesc]]
 
-     
+        subs_dict = dict([(b,a) for a,b in r_subs_dict.items()])
+        # Now, rename in codebook
+        self.codebook.rename_keys(subs_dict)
+        # And rename columns:
+        self.rename(columns = dict(subs_dict), inplace=True)
 
+
+    def grep(self, search_string):
+        """ Look for a string in variable names, descriptions, questionnaire questions, etc
+        """
+        found = []
+        ss = search_string.lower()
+        for k,v in self.items():
+            if ss in (k + dgetget(self.codebook,[k, 'desc'],'') + dgetget(self.codebook,[k, 'question'],'') ).lower():
+                found += [k]
+        return found
+        print '\n'.join(found)
+
+        
+    def set_float_values_from_negative_integers(self, subset=None, exclude=None):
+        """ For integer values, assume negative values"""
+        cb = self.codebook
+        for k,cbk in cb.items():
+            if 'float_values' not in cbk and 'labels' in cbk:
+                assert all(([isinstance(kk,int) for kk in cbk['labels'].keys()]))
+                cbk['float_values'] = dict([(k, np.nan if k<0 else k) for k,v in cbk['labels'].items()])
+    def assert_unique_columns(self):
+        assert len(self.columns.unique()) == len(self.columns)
+
+    def to_floats(self):
+        """
+        Use the float_values element in codebook entries to recast columns as floats, with non-response values changed to NaN
+        """
+        newself = self.copy(deep=True)
+        for k,cbk in newself.codebook.items():
+            newself[k] = newself[k].map(lambda vv,k=k: dgetget(newself.codebook, [k, 'float_values', vv], vv))
+        return newself
+        
 # Module interfaces to surveyPandas:
-def read_stata(stata_filename):
+def read_stata(stata_filename, unicode_to_latex=True):
     """ 
     Load data from a Stata file into a Pandas DataFrame derivative, but also load all the label and value label information into a codebook structure.
     """
@@ -588,6 +661,11 @@ def read_stata(stata_filename):
     cb = surveycodebook(stata_filename)
     for k,v in cb.items():
         cb[k]['rawname_stata'] = k # Keep record of original variable name
+
+    if unicode_to_latex:        
+        # Make the strings easier for LaTeX and other printing:
+        treat_OrderedDict_strings_recursively(cb, some_unicode_quotes_to_latex)
+        
     sdf.codebook = cb
     return sdf
     
@@ -599,7 +677,12 @@ if __name__ == '__main__':
     test_treat_odict_strings_recursively()
     test_surveycodebook()
     sdf = read_stata(paths['working']+'WV6_Stata_v_2016_01_01.dta.gz')
+    sdf.assert_unique_columns()
     sdf.rename_variables_from_descriptions()
+    sdf.assert_unique_columns()
+    sdf.set_float_values_from_negative_integers()
+    sdf.assert_unique_columns()
+    fdf= sdf.to_floats()
 #cb =surveycodebook({1:2, '3':'f'})
 #print cb.keys()
 
