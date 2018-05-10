@@ -1919,3 +1919,28 @@ def _pdfcodebooktxt2tsv(txtfile,tsvfile,survey=None):
 
 if __name__ == '__main__':
     sc =stataCodebookClass(fromDTA= paths['working']+'WV6_Stata_v_2016_01_01')
+
+
+"""
+
+
+First function below 99% complete/tested... but then Statscan gave me Stata do files.
+Still to do: 
+add the infix command to read the data, as well:
+
+ infix acc_rate 1-4 spdlimit 6-7 acc_pts 9-11 using highway.raw
+
+or, create a .dct file which defines the format:
+
+infix using highway
+infix dictionary {
+acc_rate 1-4
+spdlimit 6-7
+acc_pts 9-11
+}
+
+and then read it in with
+
+infix using highway.dct
+
+"""

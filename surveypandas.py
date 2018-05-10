@@ -14,47 +14,19 @@ Some variables may share value labels. In this case, the actual lookups may be s
 Classes:
 
 surveyDataFrame : a Pandas DataFrame object augmented with survey-related data and methods
-surveySeries : corresponding Series object. 
+surveySeries : corresponding Series object.  Not started yet.
 
-surveycodebook: 
+surveycodebook: A nested dict providing information about variables in the dataset
 
-Here we define a "pandas + dict" dataformat, in which a DataFrame and a dict together specify the values as well as the variable descriptions and value descriptions for (survey) data.
-The DataFrame is a Pandas DataFrame. 
- The dict is nested, with format:
-{'_dataset_description': string,
-variablename: {'description': string,
-               'values': { int1: string,
-                           int2: string, 
-                           ....
-                          }
-              }
-}
 
 Optionally, there can also be 'labelsname' and 'prompt' fields for each variable. These contain respectively some name for the set of values; and the actual wording of the survey question, if any, behind the variable.
 
 
 This means that variables which have the same set of values descriptions list those descriptions redundantly.
 
-We save the data and labels together in a pickled file with name ending in '.pysurvey'
+We save the data and labels together in a pickled file with name ending in '.spandas'
 
-First function below 99% complete/tested... but then Statscan gave me Stata do files.
-Still to do: 
-add the infix command to read the data, as well:
 
- infix acc_rate 1-4 spdlimit 6-7 acc_pts 9-11 using highway.raw
-
-or, create a .dct file which defines the format:
-
-infix using highway
-infix dictionary {
-acc_rate 1-4
-spdlimit 6-7
-acc_pts 9-11
-}
-
-and then read it in with
-
-infix using highway.dct
 
 n.b.: statsmodels.iolib.foreign.StataReader  seems not to be maintained; only Stata versions 8-12 can be read. Thus we use Stata text output as a version-independent way to transfer.
 
