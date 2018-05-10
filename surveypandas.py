@@ -66,6 +66,8 @@ from collections import OrderedDict
 import os
 import pandas as pd
 import numpy as np
+import cPickle as pkl
+
 try:
     from cpblUtilities import doSystem, dgetget
 except ImportError:
@@ -196,7 +198,7 @@ def load_text_data_using_SAS_syntax(sasfile='/home/cpbl/rdc/inputData/GSS27/Synt
         df.to_stata(rawfile)
 
         codebook=surveycodebook(labels)
-        survey=surveypandas(codebook=labels)
+        survey=surveyDataFrame(codebook=labels)
         import numpy as np
         indices=np.cumsum([1]+[int(aa[2]) for aa in fmts])
         thevars=[aa[1] for aa in fmts]
@@ -271,7 +273,7 @@ class surveycodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
 
         subset lists a set of variables to include
         """
-        from pystata import stripdtagz # Import pystata locally, since it's only one interface for surveyPandas
+        from pystata import stripdtagz # Import pystata locally, since it's only one interface for surveyDataFrame
         from codecs import open # Overwrite open so as to always use utf8 for text files and reading Stata output
 
         datafilepath=stripdtagz(datafilepath)
@@ -550,19 +552,21 @@ def test_surveycodebook():
 
 ###########################################################################################
 ###
-class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
+class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
     ###
     #######################################################################################
     def __init__(self, data=None, index=None, columns=None, dtype=None, copy=False,                   codebook=None):
         # Can I not use super() in the line below?
-        pd.DataFrame.__init__(self, data=data, index =index, columns= columns, dtype= dtype, copy=copy)
+        super(surveyDataFrame, self).__init__(data=data, index =index, columns= columns, dtype= dtype, copy=copy)
+        
+        #pd.DataFrame.__init__(self, data=data, index =index, columns= columns, dtype= dtype, copy=copy)
         self.codebook = None
         
         if codebook is not None:
             self.codebook=surveycodebook(codebook)
 
     #def _from_dataframe_and_codebook(self, df, cb):
-    #    return( surveypandas(data = df, codebook=cb) )
+    #    return( surveyDataFrame(data = df, codebook=cb) )
                 
     def copy(self, deep=True):
         """
@@ -581,7 +585,7 @@ class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
         copy : type of caller
         """
         # Use DataFrame's copy for the DF part. And deepcopy 
-        return surveypandas(data = pd.DataFrame(self).copy(deep=True),
+        return surveyDataFrame(data = pd.DataFrame(self).copy(deep=True),
                             codebook = deepcopy(self.codebook) )
 
     def __copy__(self, deep=True):
@@ -591,6 +595,12 @@ class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
         if memo is None:
             memo = {}
         return self.copy(deep=True)
+    def to_pickle(self, path, compression='infer',
+                  protocol= pkl.HIGHEST_PROTOCOL):
+        """ See pandas.io.pickle and pandas.DataFrame.to_pickle. Clearly, the latter is not very specific to the structure of DataFrames, since I can pass in a dict instead. But the approach below preserves the calling format of Pandas' DataFrame, at least. """
+        #from pandas.io.common import _get_handle, _infer_compression, _stringify_path
+        from pandas.io.pickle import to_pickle as pandas_to_pickle
+        return pandas_to_pickle( {'o': self, 'c':self.codebook}, path, compression=compression, protocol=protocol)
             
     def rename_variables(self, lookup):
         """  """
@@ -649,7 +659,15 @@ class surveypandas(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
             newself[k] = newself[k].map(lambda vv,k=k: dgetget(newself.codebook, [k, 'float_values', vv], vv))
         return newself
         
-# Module interfaces to surveyPandas:
+# Module interfaces to surveyDataFrame:
+def read_pickle(path, compression='infer'):
+    with open(path) as f:
+        loaded_obj = pkl.load(f)
+    if isinstance(loaded_obj , dict) and 'o' in loaded_obj and 'c' in loaded_obj:
+        return  surveyDataFrame(loaded_obj['o'], codebook = loaded_obj['c'])
+    if isinstance(loaded_obj , pd.DataFrame):
+        return  surveyDataFrame(loaded_obj)
+    
 def read_stata(stata_filename, unicode_to_latex=True):
     """ 
     Load data from a Stata file into a Pandas DataFrame derivative, but also load all the label and value label information into a codebook structure.
@@ -657,7 +675,7 @@ def read_stata(stata_filename, unicode_to_latex=True):
     from pystata import dta2df
     df = dta2df(stata_filename)
     assert not df.empty
-    sdf = surveypandas( df )
+    sdf = surveyDataFrame( df )
     assert not sdf.empty
     cb = surveycodebook(stata_filename)
     for k,v in cb.items():
@@ -685,8 +703,26 @@ if __name__ == '__main__':
     sdf.assert_unique_columns()
     print sdf.grep('satis')
     sdf['Satisfaction_with_your_life'].describe()
-    fdf= sdf.to_floats() # Very slow, still.
-    fdf['Satisfaction_with_your_life'].describe()
 
+    sdf.to_pickle(paths['scratch']+'surveypandas-test-raw.spandas') # Fairly compact
+    pd.DataFrame(sdf).to_pickle(paths['scratch']+'surveypandas-test-df.spandas') # Fairly compact
+    with open(paths['scratch']+'surveypandas-test-cb.spandas', 'wb') as f:        pkl.dump(sdf.codebook, f)
 
+    print (' Reading raw...')
+    sdf2 = read_pickle(paths['scratch']+'surveypandas-test-raw.spandas') 
+    assert len(sdf2)==len(sdf)
+    assert sdf2.codebook
 
+    if 0: 
+
+        print (' Creating float...')
+        fdf= sdf.to_floats() # Very slow, still.
+        fdf['Satisfaction_with_your_life'].describe()
+        print (' Saving float...')
+        fdf.to_pickle(paths['scratch']+'surveypandas-test-float.spandas') # Enormous. Don't do this if you can avoid it.
+        print (' Reading float...')
+        fdf2 = read_pickle(paths['scratch']+'surveypandas-test-raw.spandas') 
+        assert len(fdf2)==len(fdf)
+        assert fdf2.codebook
+
+    
