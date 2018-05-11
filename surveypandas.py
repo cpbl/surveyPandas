@@ -595,9 +595,16 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
         for cc in self.columns:
             print('{}: {}'.format(cc, dgetget(self.codebook, [cc,'desc'], '')))
      
-    def rename_variables(self, lookup):
+    def rename_columns(self, subs_dict, inplace=False):
         """  """
-    def rename_variables_from_descriptions(self, subset = None, inplace = False):
+        # Now, rename in codebook
+        cb = self.codebook.rename_keys(subs_dict, inplace=inplace)
+        # And rename columns:
+        df = self.rename(columns = dict(subs_dict), inplace=inplace)
+        if not inplace:
+            return surveyDataFrame(df, codebook = cb)
+        
+    def rename_variables_from_descriptions(self, subset = None, skip_already_renamed = True, inplace = False):
         """ Use 'desc' field of codebook to provide crude variable names:
         """
         assert len(self.columns.unique()) == len(self.columns)
@@ -605,6 +612,9 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
         r_subs_dict ={}
         for vv in self.columns:
             if subset is not None and vv in subset:
+                continue
+            impn = dgetget(self.codebook, [vv, 'imported_name'], '') 
+            if impn and impn != vv and skip_already_renamed:
                 continue
             if vv not in self.codebook:
                 raise("sf")
@@ -615,12 +625,7 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
             #subs_dict += [[vv, formattedDesc]]
 
         subs_dict = dict([(b,a) for a,b in r_subs_dict.items()])
-        # Now, rename in codebook
-        cb = self.codebook.rename_keys(subs_dict, inplace=inplace)
-        # And rename columns:
-        df = self.rename(columns = dict(subs_dict), inplace=inplace)
-        if not inplace:
-            return surveyDataFrame(df, codebook = cb)
+        return self.rename_columns(subs_dict, inplace = inplace)
 
     def grep(self, search_string):
         """ Look for a string in variable names, descriptions, questionnaire questions, etc
@@ -642,6 +647,11 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
         cc = self.grep(search_string)
         surveyDataFrame(self[ cc ], codebook= self.codebook).describe()
 
+    def set_NaN_strings(self, list_of_strings, subset=None, exclude=None):
+        """ list of strings is something like ["Don't know", "Not asked"].
+        Integer values with these labels will be set to NaN in the float_values lookup.
+        """
+        pass
         
     def set_float_values_from_negative_integers(self, subset=None, exclude=None):
         """ Create new "float_values" lookup in the codebook.
@@ -691,7 +701,7 @@ def read_stata(stata_filename, unicode_to_latex=True):
     assert not sdf.empty
     cb = surveyCodebook(stata_filename)
     for k,v in cb.items():
-        cb[k]['rawname_stata'] = k # Keep record of original variable name
+        cb[k]['imported_name'] = k # Keep record of original variable name
 
     if unicode_to_latex:        
         # Make the strings easier for LaTeX and other printing:

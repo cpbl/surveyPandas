@@ -11,10 +11,11 @@ Example session (to do):
     sdf = read_stata('WV6_Stata_v_2016_01_01.dta.gz')     # Load both the data and codebook information from a Stata file
     sdf.rename_variables_from_descriptions()              # Rename remaining columns to something readable, based on their descriptions:
     sdf.set_float_values_from_negative_integers()         # Create a missing value lookup for integer columns based on the codebook
-    cols =sdf.grep('satis')                                     # Search for all columns with this string in their name or documentation (case insensitive)
+    sdf.set_NaN_strings(["Don't know", "Not asked", "Refused"],) # Do the same thing, but using value labels
+    cols =sdf.grep('satis')                               # Search for all columns with this string in their name or documentation (case insensitive)
     sdf.dgrep('satis')                                    # Report stats and descriptions for those same columns
     sdf[  cols  ].describe()                              # Alternative syntax to above
-    sdf.to_floats()[ cols ].describe()              # Show stats on non-missing values for the columns of interest
+    sdf.to_floats()[ cols ].describe()                    # Show stats on non-missing values for the columns of interest
     sdf.to_pickle('mydata.spandas')                       # Save data in compressed python format
 
     sdf2 = read_pickle('mydata.spandas')                  # And read it back
