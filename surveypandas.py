@@ -15,8 +15,7 @@ Classes:
 
 surveyDataFrame : a Pandas DataFrame object augmented with survey-related data and methods
 surveySeries : corresponding Series object.  Not started yet.
-
-surveycodebook: A nested dict providing information about variables in the dataset
+surveyCodebook: A nested dict providing information about variables in the dataset
 
 
 Optionally, there can also be 'labelsname' and 'prompt' fields for each variable. These contain respectively some name for the set of values; and the actual wording of the survey question, if any, behind the variable.
@@ -49,8 +48,9 @@ from copy import deepcopy
 
 def some_unicode_quotes_to_latex(str):
     subs =[
-        [u"\u0027", "\\textquotesingle "],
-        [u'´', u"'"],
+        [u"\u0027", ";"], #\\textquotesingle "],
+        [u'´', "'"],
+        [u'\u2019', "'"],
         [u'“', "``"],
         [u'”', "''"],
         ]
@@ -58,10 +58,11 @@ def some_unicode_quotes_to_latex(str):
         str=str.replace(a,b)
     return str
 
-def treat_OrderedDict_strings_recursively(dictlike, method):
+def treat_OrderedDict_strings_recursively(dictlike, method, inplace=True):
     """ Recursively treat strings in a dict or OrderedDict by applying some method to each string in each key/value. E.g. to remove some unicode
     This is for OrderedDicts. normal dicts to not accept the argument to popitem, so we would need to loop through the keys explicitly (what's wrong with that?)
     """
+    assert inplace # False not written yet
     def treat_value(vv):
         if isinstance(v, basestring):
             return method(vv)
@@ -169,7 +170,7 @@ def load_text_data_using_SAS_syntax(sasfile='/home/cpbl/rdc/inputData/GSS27/Synt
         rawfile=fn+'_raw'+ext
         df.to_stata(rawfile)
 
-        codebook=surveycodebook(labels)
+        codebook=surveyCodebook(labels)
         survey=surveyDataFrame(codebook=labels)
         import numpy as np
         indices=np.cumsum([1]+[int(aa[2]) for aa in fmts])
@@ -182,17 +183,16 @@ def load_text_data_using_SAS_syntax(sasfile='/home/cpbl/rdc/inputData/GSS27/Synt
         stataout+=stata.stataSave(outfileStata)
         stata.stataSystem(stataout)
 
-
         
 ###########################################################################################
 ###
-class surveycodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
+class surveyCodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
     ###
     #######################################################################################
     """
         The primary dict/data of this object is an OrderedDict of information about survey data variables.
 
-    Value labels are lookups (OrderedDicts) from integer values to strings  which can initially be shared between variables (keys of surveycodebook). However, they must be deepcopied and made independent if ever the value labels are changed for some variable.
+    Value labels are lookups (OrderedDicts) from integer values to strings  which can initially be shared between variables (keys of surveyCodebook). However, they must be deepcopied and made independent if ever the value labels are changed for some variable.
     The same is true of Float Values, which is a lookup that can be used to allow some integers to have NaN values
 
     In general, where text may be used for formatted printing, LaTeX markup is used.
@@ -217,16 +217,16 @@ class surveycodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
         """
 
 
-        if source.__class__ in [surveycodebook,  OrderedDict]:
-            super(surveycodebook, self).__init__(source)
+        if source.__class__ in [surveyCodebook,  OrderedDict]:
+            super(surveyCodebook, self).__init__(source)
         elif source.__class__ == dict: # Got an unordered dict for some reason. Should do some checking on its contents: TO DO
-            super(surveycodebook, self).__init__(OrderedDict(source))
+            super(surveyCodebook, self).__init__(OrderedDict(source))
             
         elif isinstance(source, basestring):
             foo =self._from_stata(source)
-            super(surveycodebook, self).__init__(foo)
+            super(surveyCodebook, self).__init__(foo)
         else:
-            super(surveycodebook, self).__init__(source)
+            super(surveyCodebook, self).__init__(source)
             
     ################################################################
     def _from_stata(self,datafilepath,recreate=None,toLower=None, subset = None):
@@ -274,13 +274,13 @@ class surveycodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
         subsetString='codebook \n'
         if subset:
             subsetString="""
-foreach var in  """+' '.join(subset)+""" {
-capture confirm variable `var',exact
-if _rc==0 {
-codebook `var'
-}
-}
-"""
+            foreach var in  """+' '.join(subset)+""" {
+            capture confirm variable `var',exact
+            if _rc==0 {
+            codebook `var'
+            }
+            }
+            """
         if forceC:
 
             print '    To create '+CdoFileName+':  '
@@ -502,22 +502,28 @@ codebook `var'
             outs+='\n'+'*'*(not not valuesOnly)+'capture noisily label variable %s "%s"\n'%(thisVar,vcb[desckey])
         return(outs)
     
-    def rename_keys(self, substitution_pairs):
+    def rename_keys(self, substitution_pairs, inplace=False):
         """  To preserve order, this cycles through every key, just to change any. So the more that are passed at once in subsituion_pairs, the better
         """
         dsubstitution_pairs = dict( substitution_pairs)
-        for k in  list(self.keys()):
-            v=self.pop(k, False)
+        if inplace:
+            obj = self
+        else:
+            obj = deepcopy(self)
+        for k in  list(obj.keys()):
+            v=obj.pop(k, False)
             if k in dsubstitution_pairs:
-                self[dsubstitution_pairs[k]] = v
+                obj[dsubstitution_pairs[k]] = v
                 dsubstitution_pairs.pop(k) # For efficiency in "if", above
             else:
-                self[k] = v
+                obj[k] = v
+        if not inplace:
+            return obj
 
 
-def test_surveycodebook():
+def test_surveyCodebook():
     stata_filename = paths['working']+'WV6_Stata_v_2016_01_01'
-    cb = surveycodebook(stata_filename)
+    cb = surveyCodebook(stata_filename)
     # Make the strings easier for LaTeX and other printing:
     treat_OrderedDict_strings_recursively(cb, some_unicode_quotes_to_latex)
     
@@ -527,7 +533,9 @@ def test_surveycodebook():
 class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
     ###
     #######################################################################################
-    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=False,                   codebook=None):
+    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=False,                   codebook=None,
+                 drop = True, # Drop codebook entries which don't have associated columns
+                 ):
         # Can I not use super() in the line below?
         super(surveyDataFrame, self).__init__(data=data, index =index, columns= columns, dtype= dtype, copy=copy)
         
@@ -535,7 +543,12 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
         self.codebook = None
         
         if codebook is not None:
-            self.codebook=surveycodebook(codebook)
+            self.codebook=surveyCodebook(codebook)
+
+        if drop:
+            for k in self.codebook:
+                if k not in self.columns:
+                    self.codebook.pop(k)
 
     #def _from_dataframe_and_codebook(self, df, cb):
     #    return( surveyDataFrame(data = df, codebook=cb) )
@@ -573,10 +586,17 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
         #from pandas.io.common import _get_handle, _infer_compression, _stringify_path
         from pandas.io.pickle import to_pickle as pandas_to_pickle
         return pandas_to_pickle( {'o': self, 'c':self.codebook}, path, compression=compression, protocol=protocol)
-            
+
+
+    def describe(self, **argv):
+        print( pd.DataFrame.describe(self,**argv)+'\n')
+        # And also show descriptions, at least:
+        for cc in self.columns:
+            print('{}: {}'.format(cc, dgetget(self.codebook, [cc,'desc'], '')))
+     
     def rename_variables(self, lookup):
         """  """
-    def rename_variables_from_descriptions(self, subset = None):
+    def rename_variables_from_descriptions(self, subset = None, inplace = False):
         """ Use 'desc' field of codebook to provide crude variable names:
         """
         assert len(self.columns.unique()) == len(self.columns)
@@ -595,10 +615,11 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
 
         subs_dict = dict([(b,a) for a,b in r_subs_dict.items()])
         # Now, rename in codebook
-        self.codebook.rename_keys(subs_dict)
+        cb = self.codebook.rename_keys(subs_dict, inplace=inplace)
         # And rename columns:
-        self.rename(columns = dict(subs_dict), inplace=True)
-
+        df = self.rename(columns = dict(subs_dict), inplace=inplace)
+        if not inplace:
+            return surveyDataFrame(df, codebook = cb)
 
     def grep(self, search_string):
         """ Look for a string in variable names, descriptions, questionnaire questions, etc
@@ -610,6 +631,15 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
                 found += [k]
         return found
         print '\n'.join(found)
+
+    def dgrep(self, search_string,
+              width=None, # Max Display width for descriptions
+            ):
+        """ Also give the descriptions for columns found by grep.  What would be a better name/etc for this?
+        TO DO: Also show questionnaire questions if available.
+        """
+        cc = self.grep(search_string)
+        surveyDataFrame(self[ cc ], codebook= self.codebook).describe()
 
         
     def set_float_values_from_negative_integers(self, subset=None, exclude=None):
@@ -649,24 +679,27 @@ def read_stata(stata_filename, unicode_to_latex=True):
     assert not df.empty
     sdf = surveyDataFrame( df )
     assert not sdf.empty
-    cb = surveycodebook(stata_filename)
+    cb = surveyCodebook(stata_filename)
     for k,v in cb.items():
         cb[k]['rawname_stata'] = k # Keep record of original variable name
 
     if unicode_to_latex:        
         # Make the strings easier for LaTeX and other printing:
         treat_OrderedDict_strings_recursively(cb, some_unicode_quotes_to_latex)
-        
     sdf.codebook = cb
     return sdf
     
     #Test codebook loading:
     # Load 
 
-    
-if __name__ == '__main__':
+
+
+
+
+# Testing here
+def test_surveypandas():
     test_treat_odict_strings_recursively()
-    test_surveycodebook()
+    test_surveyCodebook()
     sdf = read_stata(paths['working']+'WV6_Stata_v_2016_01_01.dta.gz')
     sdf.assert_unique_columns()
     sdf.rename_variables_from_descriptions()
@@ -685,8 +718,8 @@ if __name__ == '__main__':
     assert len(sdf2)==len(sdf)
     assert sdf2.codebook
 
-    if 0: 
-
+    if 1: 
+        print(' Rest will be slow...')
         print (' Creating float...')
         fdf= sdf.to_floats() # Very slow, still.
         fdf['Satisfaction_with_your_life'].describe()
@@ -697,4 +730,8 @@ if __name__ == '__main__':
         assert len(fdf2)==len(fdf)
         assert fdf2.codebook
 
+
+    
+if __name__ == '__main__':
+    pass
     
