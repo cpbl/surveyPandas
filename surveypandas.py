@@ -45,6 +45,7 @@ except ImportError:
     print(' Some functions will not work. Install cpblutilities ')
     
 from copy import deepcopy
+VERBOSE=True
 
 def some_unicode_quotes_to_latex(str):
     subs =[
@@ -544,11 +545,10 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
         
         if codebook is not None:
             self.codebook=surveyCodebook(codebook)
-
-        if drop:
-            for k in self.codebook:
-                if k not in self.columns:
-                    self.codebook.pop(k)
+            if drop:
+                for k in self.codebook:
+                    if k not in self.columns:
+                        self.codebook.pop(k)
 
     #def _from_dataframe_and_codebook(self, df, cb):
     #    return( surveyDataFrame(data = df, codebook=cb) )
@@ -589,7 +589,8 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
 
 
     def describe(self, **argv):
-        print( pd.DataFrame.describe(self,**argv)+'\n')
+        print( pd.DataFrame.describe(self,**argv))
+        print('\n')
         # And also show descriptions, at least:
         for cc in self.columns:
             print('{}: {}'.format(cc, dgetget(self.codebook, [cc,'desc'], '')))
@@ -643,23 +644,32 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
 
         
     def set_float_values_from_negative_integers(self, subset=None, exclude=None):
-        """ For integer values, assume negative values"""
+        """ Create new "float_values" lookup in the codebook.
+        For integer values, assume negative values.
+        This method may not be named well?"""
         cb = self.codebook
+        counter=0
         for k,cbk in cb.items():
             if 'float_values' not in cbk and 'labels' in cbk:
                 assert all(([isinstance(kk,int) for kk in cbk['labels'].keys()]))
                 cbk['float_values'] = dict([(k, np.nan if k<0 else k) for k,v in cbk['labels'].items()])
+                counter += 1
+        if VERBOSE:
+            print(' Created float_values lookups for {} columns.'.format(counter))
+                
     def assert_unique_columns(self):
         assert len(self.columns.unique()) == len(self.columns)
 
-    def to_floats(self):
+    def to_floats(self, inplace=False):
         """
-        Use the float_values element in codebook entries to recast columns as floats, with non-response values changed to NaN
+        Use the float_values element in codebook entries to recast columns as floats, with non-response values changed to NaN.
+        For this to work, there needs to exist "float_values" lookups in codebook entries, for instance as created by set_float_values_from_negative_integers
         """
-        newself = self.copy(deep=True)
+        newself = self.copy(deep=True) if not inplace else self
         for k,cbk in newself.codebook.items():
             newself[k] = newself[k].map(lambda vv,k=k: dgetget(newself.codebook, [k, 'float_values', vv], vv))
-        return newself
+        if not inplace:
+            return newself
         
 # Module interfaces to surveyDataFrame:
 def read_pickle(path, compression='infer'):
