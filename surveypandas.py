@@ -454,6 +454,9 @@ class surveyCodebook(OrderedDict):  #  # # # # #    MAJOR CLASS    # # # # #  #
         return
 
 
+    def get_value_label(self, col, val):
+        return dgetget(self, [col, 'labels', val], val)
+        
 
     
     ################################################################
@@ -534,9 +537,12 @@ def test_surveyCodebook():
 class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  #
     ###
     #######################################################################################
-    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=False,                   codebook=None,
+    def __init__(self, data=None, codebook=None,  # Note: order is different from pandas.DataFrame
+                 index=None, columns=None, dtype=None, copy=False,                   
                  drop = True, # Drop codebook entries which don't have associated columns
                  ):
+        """ Basic construction is surveyDataFrame( DataFrame, dict or surveyCodebook )
+        """
         # Can I not use super() in the line below?
         super(surveyDataFrame, self).__init__(data=data, index =index, columns= columns, dtype= dtype, copy=copy)
         
@@ -546,13 +552,27 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
         if codebook is not None:
             self.codebook=surveyCodebook(codebook)
             if drop:
-                for k in self.codebook:
-                    if k not in self.columns:
-                        self.codebook.pop(k)
-
+                self.drop_unused_codebooks()
     #def _from_dataframe_and_codebook(self, df, cb):
     #    return( surveyDataFrame(data = df, codebook=cb) )
-                
+    def drop_unused_codebooks(self):
+        for k in self.codebook:
+            if k not in self.columns:
+                self.codebook.pop(k)
+
+    def remap_values(self, mapping):
+        pass
+    def as_labels(self, subset=None, inplace=False):
+        """ Remap a column (oops-  That should be for surveySeries) to its value labels.
+        Until this is written for surveySeries, do it for all columns in subset. Must be length one. :(
+        """
+        assert subset is not None and (len(subset)==1 or isinstance(subset, basestring))
+        assert inplace is False
+        if not  isinstance(subset, basestring): subset= subset[0]
+        assert subset in self.codebook
+        v = self[subset]
+        return v.map(lambda vv: self.codebook[subset]['labels'].get(vv, vv))
+                     
     def copy(self, deep=True):
         """
         Make a copy of this objects data.
@@ -603,8 +623,11 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
         df = self.rename(columns = dict(subs_dict), inplace=inplace)
         if not inplace:
             return surveyDataFrame(df, codebook = cb)
+        else:
+            self.assert_unique_columns() # To do: this should be checked for inplace=False too!
+
         
-    def rename_variables_from_descriptions(self, subset = None, skip_already_renamed = True, inplace = False):
+    def rename_columns_from_descriptions(self, subset = None, skip_already_renamed = True, inplace = False):
         """ Use 'desc' field of codebook to provide crude variable names:
         """
         assert len(self.columns.unique()) == len(self.columns)
@@ -640,12 +663,19 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
 
     def dgrep(self, search_string,
               width=None, # Max Display width for descriptions
+              to_floats = True, # By default, do any NaN conversion of integer-valued columns so as to give useful counts in describe()
             ):
         """ Also give the descriptions for columns found by grep.  What would be a better name/etc for this?
         TO DO: Also show questionnaire questions if available.
         """
         cc = self.grep(search_string)
-        surveyDataFrame(self[ cc ], codebook= self.codebook).describe()
+        if cc and to_floats:
+            if VERBOSE: print(' Converting {} columns to floats prior to describe()...'.format(len(cc)))
+            surveyDataFrame(self[ cc ], codebook= self.codebook).to_floats().describe()
+        elif cc:
+            surveyDataFrame(self[ cc ], codebook= self.codebook).describe()
+        else:
+            print(' Nothing found matching "{}"'.format(search_string))
 
     def set_NaN_strings(self, list_of_strings, subset=None, exclude=None):
         """ list of strings is something like ["Don't know", "Not asked"].
@@ -680,7 +710,44 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
             newself[k] = newself[k].map(lambda vv,k=k: dgetget(newself.codebook, [k, 'float_values', vv], vv))
         if not inplace:
             return newself
+
+    def append_indicators(self, col, reference_value = None, dropna = True):
+        """ Append a complete set of indicator variables (columns) for the values of discrete variable discretecol.
+        If convenient, these will be named according to the value labels.
+        The set of new columns is returned.
+
+        If reference_value is provided, an indicator for this value will be excluded.
+        """
+        assert dropna is True # Alternative not written yet
+        newcols =[]
+        uvals = self[col].dropna().unique()
+        if col in self.codebook:
+            nv = len(uvals)
+            labels = self.as_labels(col)         
+            nl = len(labels.unique())
+            assert nv == nl # Other cases not written yet
+            for vv in uvals: #labels.unique():
+                LL = self.codebook.get_value_label(col, vv)
+                if LL == reference_value:
+                    continue
+                newcol = 'i'+col+'.'+''.join([c for c in LL if c.isalnum()])
+                assert newcol not in self
+                assert newcol not in self.codebook
+                self[newcol] =  (labels == LL).astype(int) # What about NaNs?
+                self.codebook[newcol] = {'desc': 'Indicator for {} == {} ("{}")'.format(col, vv, LL )  }
+                newcols += [newcol]
+            return newcols
+        # There are no labels for this col
+        for vv in uvals:
+            newcol = 'i'+col+'.'+''.join([c for c in vv if c.isalnum()])
+            assert newcol not in self
+            assert newcol not in self.codebook
+            self[newcol] =  (self[col] == vv).astype(int) # What about NaNs?
+            self.codebook[newcol] = {'desc': 'Indicator for {} == {}'.format(col, vv )  }
+            newcols += [newcol]
+        return newcols
         
+    
 # Module interfaces to surveyDataFrame:
 def read_pickle(path, compression='infer'):
     with open(path) as f:
@@ -722,7 +789,7 @@ def test_surveypandas():
     test_surveyCodebook()
     sdf = read_stata(paths['working']+'WV6_Stata_v_2016_01_01.dta.gz')
     sdf.assert_unique_columns()
-    sdf.rename_variables_from_descriptions()
+    sdf.rename_columns_from_descriptions()
     sdf.assert_unique_columns()
     sdf.set_float_values_from_negative_integers() 
     sdf.assert_unique_columns()
@@ -753,5 +820,9 @@ def test_surveypandas():
 
     
 if __name__ == '__main__':
+    # Debug:
+    sdf = read_stata(paths['working']+'WV6_Stata_v_2016_01_01.dta.gz')
+    sdf.append_indicators('V2')
+    
     pass
     
