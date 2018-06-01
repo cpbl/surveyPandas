@@ -746,8 +746,33 @@ class surveyDataFrame(pd.DataFrame):  #  # # # # #    MAJOR CLASS    # # # # #  
             self.codebook[newcol] = {'desc': 'Indicator for {} == {}'.format(col, vv )  }
             newcols += [newcol]
         return newcols
+    def to_stata(self, filename, compress=None,  **args):
+        """ This *should* attempt to make column names Stata-friendly, ...
+              and export codebook info to Stata (I may already have routines for some of this?)
+        What to do with index?
+
+        compress=True: by default, convert .dta files to .dta.gz files (See Stata's gzuse page). Otherwise, go by the filename extension
+        """
+        cols = self.columns
+        assert len(cols) == len(cols.unique())
+        newcols = [cc.replace(' ','_') for cc in cols]
+        # To do: check for duplicates
+        # To do: truncate to Stata length
+        outdf = pd.DataFrame(self).copy()
+        outdf.columns = newcols
+        # To do: check/correct filename extension, better than one line below
+        if filename.endswith('.dta'):
+            outdf.to_stata(filename, **args)
+        elif filename.endswith('.dta.gz'):
+            outdf.to_stata(filename[:-3], **args)
+            os.system('gzip {}'.format(filename[:-3]))
+        else:
+            ToDO_foooo
+        return
+    # Here, reproduce various DataFrame calls so as to reconstruct the surveypandas by re-adding the codebook information afterwards:
+    def query(self, qs, **args):
+        return  surveyDataFrame(pd.DataFrame.query(self, qs, **args), codebook=self.codebook)
         
-    
 # Module interfaces to surveyDataFrame:
 def read_pickle(path, compression='infer'):
     with open(path) as f:
